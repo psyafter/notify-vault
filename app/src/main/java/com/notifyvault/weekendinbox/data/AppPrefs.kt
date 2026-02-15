@@ -70,7 +70,7 @@ class AppPrefs(private val context: Context) {
     }
 
     suspend fun swipeActionMode(): SwipeActionMode {
-        val raw = context.dataStore.data.map { it[KEY_SWIPE_ACTION_MODE] ?: SwipeActionMode.SWIPE_IMMEDIATE_DELETE.name }.first()
+        val raw = context.dataStore.data.map { it[KEY_SWIPE_ACTION_MODE] ?: SwipeActionMode.SWIPE_REVEAL_DELETE.name }.first()
         return SwipeActionMode.fromStorage(raw)
     }
 
