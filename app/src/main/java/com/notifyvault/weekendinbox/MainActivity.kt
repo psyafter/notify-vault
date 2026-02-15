@@ -79,9 +79,11 @@ import com.notifyvault.weekendinbox.data.CaptureMode
 import com.notifyvault.weekendinbox.data.CapturedNotificationEntity
 import com.notifyvault.weekendinbox.data.RuleEntity
 import com.notifyvault.weekendinbox.data.RuleType
+import com.notifyvault.weekendinbox.data.SwipeActionMode
 import com.notifyvault.weekendinbox.domain.OpenPath
 import com.notifyvault.weekendinbox.service.VaultNotificationListenerService
 import com.notifyvault.weekendinbox.util.hasNotificationAccess
+import com.notifyvault.weekendinbox.util.formatDiagnosticsReport
 import com.notifyvault.weekendinbox.util.hasPostNotificationsPermission
 import com.notifyvault.weekendinbox.util.isBackgroundRestricted
 import com.notifyvault.weekendinbox.util.isIgnoringBatteryOptimizations
@@ -158,7 +160,22 @@ class MainViewModel(app: NotifyVaultApp, private val container: AppContainer) : 
     fun toggleRule(rule: RuleEntity, active: Boolean) = viewModelScope.launch { container.ruleRepository.upsert(rule.copy(isActive = active)) }
     fun deleteRule(id: Long) = viewModelScope.launch { container.ruleRepository.delete(id) }
     fun markHandled(id: Long) = viewModelScope.launch { container.notificationRepository.markHandled(id) }
-    fun deleteNotification(id: Long) = viewModelScope.launch { container.notificationRepository.delete(id) }
+
+    fun deleteNotification(item: CapturedNotificationEntity) = viewModelScope.launch {
+        if (container.prefs.dismissSystemOnDeleteEnabled()) {
+            VaultNotificationListenerService.cancelActiveNotificationBestEffort(item.notificationKey)
+        }
+        container.notificationRepository.delete(item.id)
+    }
+
+    fun restoreNotification(item: CapturedNotificationEntity) = viewModelScope.launch {
+        container.notificationRepository.restore(item)
+    }
+
+    fun swipeActionMode(): SwipeActionMode = container.prefs.swipeActionMode()
+    fun setSwipeActionMode(mode: SwipeActionMode) = container.prefs.setSwipeActionMode(mode)
+    fun dismissSystemOnDeleteEnabled(): Boolean = container.prefs.dismissSystemOnDeleteEnabled()
+    fun setDismissSystemOnDeleteEnabled(enabled: Boolean) = container.prefs.setDismissSystemOnDeleteEnabled(enabled)
 
     fun setAppSelected(packageName: String, selected: Boolean) = viewModelScope.launch {
         container.selectedAppsRepository.setSelected(packageName, selected)
@@ -239,37 +256,72 @@ fun NotifyVaultAppUi(vm: MainViewModel, openAccessSettings: () -> Unit) {
                 OutlinedTextField(pkg ?: "", { pkg = it.ifBlank { null } }, label = { Text("Package filter") }, modifier = Modifier.fillMaxWidth())
                 Text("Known packages: ${packages.joinToString()}")
 
+                var expandedNotificationId by remember { mutableStateOf<Long?>(null) }
+                val swipeMode = vm.swipeActionMode()
+
                 LazyColumn {
                     items(notifications, key = { it.id }) { item ->
+                        val isExpanded = expandedNotificationId == item.id
                         val dismissState = androidx.compose.material3.rememberSwipeToDismissBoxState(confirmValueChange = {
-                            when (it) {
-                                SwipeToDismissBoxValue.StartToEnd -> {
-                                    vm.markHandled(item.id)
-                                    scope.launch { snackbar.showSnackbar("Marked handled") }
-                                    true
+                            if (it == SwipeToDismissBoxValue.EndToStart && swipeMode == SwipeActionMode.SWIPE_IMMEDIATE_DELETE) {
+                                vm.deleteNotification(item)
+                                scope.launch {
+                                    val result = snackbar.showSnackbar("Deleted", actionLabel = "Undo")
+                                    if (result == androidx.compose.material3.SnackbarResult.ActionPerformed) {
+                                        vm.restoreNotification(item)
+                                    }
                                 }
-                                SwipeToDismissBoxValue.EndToStart -> {
-                                    vm.deleteNotification(item.id)
-                                    scope.launch { snackbar.showSnackbar("Deleted") }
-                                    true
-                                }
-                                else -> false
+                                true
+                            } else {
+                                false
                             }
                         })
-                        SwipeToDismissBox(state = dismissState, backgroundContent = {}) {
-                            Card(modifier = Modifier.fillMaxWidth().padding(vertical = 4.dp).clickable {
-                                when (vm.openSavedNotification(item)) {
-                                    OpenPath.APP_LAUNCH_FALLBACK -> scope.launch {
-                                        snackbar.showSnackbar("Opened app (original notification link no longer available).")
+
+                        SwipeToDismissBox(
+                            state = dismissState,
+                            enableDismissFromStartToEnd = false,
+                            enableDismissFromEndToStart = true,
+                            backgroundContent = {
+                                if (swipeMode == SwipeActionMode.SWIPE_REVEAL_DELETE) {
+                                    Row(
+                                        modifier = Modifier.fillMaxSize().padding(4.dp),
+                                        horizontalArrangement = Arrangement.End
+                                    ) {
+                                        Button(onClick = {
+                                            vm.deleteNotification(item)
+                                            scope.launch {
+                                                val result = snackbar.showSnackbar("Deleted", actionLabel = "Undo")
+                                                if (result == androidx.compose.material3.SnackbarResult.ActionPerformed) {
+                                                    vm.restoreNotification(item)
+                                                }
+                                            }
+                                        }) { Text("Delete") }
                                     }
-                                    else -> Unit
                                 }
+                            }
+                        ) {
+                            Card(modifier = Modifier.fillMaxWidth().padding(vertical = 4.dp).clickable {
+                                expandedNotificationId = if (isExpanded) null else item.id
                             }) {
                                 Column(Modifier.padding(12.dp)) {
-                                    Text(item.packageName, fontWeight = FontWeight.Bold)
-                                    Text(item.title ?: "(no title)")
-                                    Text(item.text ?: "")
-                                    Text(formatter.format(Date(item.capturedAt)))
+                                    Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
+                                        Text(item.packageName, fontWeight = FontWeight.Bold, modifier = Modifier.weight(1f))
+                                        Text(if (isExpanded) "▲" else "▼")
+                                    }
+                                    Text(item.title ?: "(no title)", maxLines = if (isExpanded) Int.MAX_VALUE else 1)
+                                    Text(item.text ?: "", maxLines = if (isExpanded) Int.MAX_VALUE else 1)
+                                    if (isExpanded) {
+                                        Text("Captured: ${formatter.format(Date(item.capturedAt))}")
+                                        Text("App: ${item.appName ?: item.packageName}")
+                                        TextButton(onClick = {
+                                            when (vm.openSavedNotification(item)) {
+                                                OpenPath.APP_LAUNCH_FALLBACK -> scope.launch {
+                                                    snackbar.showSnackbar("Opened app (original notification link no longer available).")
+                                                }
+                                                else -> Unit
+                                            }
+                                        }) { Text("Open source app") }
+                                    }
                                     if (item.handled) Text("Handled", color = MaterialTheme.colorScheme.primary)
                                 }
                             }
@@ -297,6 +349,9 @@ fun NotifyVaultAppUi(vm: MainViewModel, openAccessSettings: () -> Unit) {
                     }
                 }
             } else if (tab == 2) {
+                var swipeActionMode by remember { mutableStateOf(vm.swipeActionMode()) }
+                var dismissSystemOnDelete by remember { mutableStateOf(vm.dismissSystemOnDeleteEnabled()) }
+
                 Text("Capture mode")
                 Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                     AssistChip(onClick = { vm.setCaptureMode(CaptureMode.ONLY_SELECTED_APPS) }, label = { Text("Only selected apps") })
@@ -305,8 +360,38 @@ fun NotifyVaultAppUi(vm: MainViewModel, openAccessSettings: () -> Unit) {
                 Text("Current mode: ${vm.captureMode().name}")
                 Button(onClick = { showSelectApps = true }) { Text("Select apps") }
                 Text("Selected: ${selectedApps.size}")
+
+                Text("Swipe action", fontWeight = FontWeight.Bold, modifier = Modifier.padding(top = 12.dp))
+                Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                    AssistChip(
+                        onClick = {
+                            swipeActionMode = SwipeActionMode.SWIPE_IMMEDIATE_DELETE
+                            vm.setSwipeActionMode(swipeActionMode)
+                        },
+                        label = { Text("Immediate delete") }
+                    )
+                    AssistChip(
+                        onClick = {
+                            swipeActionMode = SwipeActionMode.SWIPE_REVEAL_DELETE
+                            vm.setSwipeActionMode(swipeActionMode)
+                        },
+                        label = { Text("Reveal delete") }
+                    )
+                }
+                Text("Current swipe mode: ${swipeActionMode.name}")
+
+                Row(modifier = Modifier.fillMaxWidth().padding(top = 8.dp), horizontalArrangement = Arrangement.SpaceBetween) {
+                    Column(modifier = Modifier.weight(1f)) {
+                        Text("Also dismiss system notification")
+                        Text("Best effort: if active and key is available.")
+                    }
+                    Checkbox(checked = dismissSystemOnDelete, onCheckedChange = {
+                        dismissSystemOnDelete = it
+                        vm.setDismissSystemOnDeleteEnabled(it)
+                    })
+                }
             } else {
-                HealthCheckTab(ruleCount = rules.size)
+                HealthCheckTab(ruleCount = rules.size, selectedAppsCount = selectedApps.size)
             }
         }
 
@@ -321,7 +406,7 @@ fun NotifyVaultAppUi(vm: MainViewModel, openAccessSettings: () -> Unit) {
 }
 
 @Composable
-private fun HealthCheckTab(ruleCount: Int) {
+private fun HealthCheckTab(ruleCount: Int, selectedAppsCount: Int) {
     val context = LocalContext.current
     val lifecycleOwner = LocalLifecycleOwner.current
     var notificationAccessEnabled by remember { mutableStateOf(hasNotificationAccess(context)) }
@@ -344,17 +429,16 @@ private fun HealthCheckTab(ruleCount: Int) {
     fun statusText(ok: Boolean): String = if (ok) "🟢 OK" else "🔴 Needs attention"
 
     fun diagnosticsText(): String {
-        return buildString {
-            appendLine("NotifyVault quick diagnostics")
-            appendLine("manufacturer=${Build.MANUFACTURER}")
-            appendLine("sdk=${Build.VERSION.SDK_INT}")
-            appendLine("notification_listener=$notificationAccessEnabled")
-            appendLine("post_notifications=$notificationsPermissionGranted")
-            appendLine("battery_optimization_ignored=$batteryExempt")
-            appendLine("background_restricted=$backgroundRestricted")
-            appendLine("rules_count=$ruleCount")
-            appendLine("timestamp=${System.currentTimeMillis()}")
-        }
+        return formatDiagnosticsReport(
+            listenerEnabled = notificationAccessEnabled,
+            batteryExempt = batteryExempt,
+            postNotificationsGranted = notificationsPermissionGranted,
+            manufacturer = Build.MANUFACTURER,
+            model = Build.MODEL,
+            sdk = Build.VERSION.SDK_INT,
+            ruleCount = ruleCount,
+            selectedAppsCount = selectedAppsCount
+        )
     }
 
     fun shareDiagnostics() {
@@ -435,8 +519,9 @@ private fun HealthCheckTab(ruleCount: Int) {
 
         Card(modifier = Modifier.fillMaxWidth()) {
             Column(modifier = Modifier.padding(12.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
-                Text("D) Background restriction", fontWeight = FontWeight.Bold)
+                Text("D) App details", fontWeight = FontWeight.Bold)
                 Text(if (backgroundRestricted) "🔴 Restricted on this device" else "🟢 Not restricted (best effort)")
+                Text("Always available fallback.")
                 Button(onClick = {
                     openAppInfoSettings(context)
                 }) { Text("Open app details") }
@@ -455,7 +540,7 @@ private fun HealthCheckTab(ruleCount: Int) {
                         } else {
                             actionMessage = "Opened App info fallback."
                         }
-                    }) { Text("Open OEM settings") }
+                    }) { Text("Try open OEM settings") }
                     TextButton(onClick = {
                         val text = (listOf(tips.title) + tips.steps.map { "- $it" }).joinToString("\n")
                         val clipboard = ContextCompat.getSystemService(context, android.content.ClipboardManager::class.java)
@@ -469,18 +554,8 @@ private fun HealthCheckTab(ruleCount: Int) {
         Card(modifier = Modifier.fillMaxWidth()) {
             Column(modifier = Modifier.padding(12.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
                 Text("Quick diagnostics", fontWeight = FontWeight.Bold)
-                Text("Capture health snapshot and share with support.")
-                Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                    Button(onClick = {
-                        val report = diagnosticsText()
-                        android.util.Log.i("NotifyVaultDiagnostics", report)
-                        actionMessage = "Diagnostics logged locally."
-                    }) { Text("Log diagnostics") }
-                    TextButton(onClick = {
-                        android.util.Log.i("NotifyVaultDiagnostics", diagnosticsText())
-                        shareDiagnostics()
-                    }) { Text("Share diagnostics") }
-                }
+                Text("Create a text snapshot and share with support.")
+                Button(onClick = { shareDiagnostics() }) { Text("Share diagnostics") }
             }
         }
 

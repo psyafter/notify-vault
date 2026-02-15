@@ -78,3 +78,24 @@ NotifyVault only opens settings screens and never sends data over network for th
   - weekend day matching
   - timezone behavior
   - package filter mode behavior
+
+
+## Vault UX improvements
+- **Swipe action setting** in Settings:
+  - `SWIPE_IMMEDIATE_DELETE` (default): swipe left deletes immediately and shows Undo snackbar.
+  - `SWIPE_REVEAL_DELETE`: swipe left reveals a Delete action button; delete occurs only on tap.
+- **Optional system dismissal** setting:
+  - "Also dismiss system notification when deleting" (default off).
+  - Best effort via Notification Listener key cancel; Vault deletion still succeeds if cancel is unavailable.
+- **Row expansion**:
+  - Tap any vault row to expand/collapse full title/text and metadata.
+  - Single-expanded-row behavior: opening one row collapses the previously expanded row.
+
+## Health / Fix setup checks
+The **Fix setup** tab now includes actionable cards for:
+- Notification Listener enabled state + deep link to listener settings.
+- Battery optimization exemption state + request exemption + optimization list.
+- Android 13+ notifications runtime permission + app notification settings link.
+- Always-available App info fallback.
+- OEM-specific setup tips with **Copy instructions** and **Try open OEM settings** (safe fallback to App info).
+- **Share diagnostics** text report with listener/battery/permission/device/rule/app-selection fields.

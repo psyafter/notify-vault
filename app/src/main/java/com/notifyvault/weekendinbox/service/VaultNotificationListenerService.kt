@@ -123,6 +123,17 @@ class VaultNotificationListenerService : NotificationListenerService() {
         private val contentIntentCache = ConcurrentHashMap<String, PendingIntent>()
         private val cacheOrder = ConcurrentLinkedQueue<String>()
 
+
+        fun cancelActiveNotificationBestEffort(notificationKey: String): Boolean {
+            val service = instance ?: return false
+            return try {
+                service.cancelNotification(notificationKey)
+                true
+            } catch (_: Exception) {
+                false
+            }
+        }
+
         fun openSavedNotification(context: Context, notificationKey: String, packageName: String): OpenPath {
             val service = instance
             if (service != null) {
