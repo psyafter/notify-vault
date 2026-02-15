@@ -12,13 +12,25 @@ data class CapturedNotificationEntity(
     val text: String?,
     val subText: String?,
     val postTime: Long,
-    val notificationKey: String?,
+    val notificationKey: String,
+    val hasContentIntent: Boolean,
     val isOngoing: Boolean,
     val isClearable: Boolean,
     val contentHash: String,
     val handled: Boolean = false,
     val capturedAt: Long = System.currentTimeMillis()
 )
+
+@Entity(tableName = "selected_apps")
+data class SelectedAppEntity(
+    @PrimaryKey val packageName: String,
+    val selectedAt: Long = System.currentTimeMillis()
+)
+
+enum class CaptureMode {
+    ONLY_SELECTED_APPS,
+    ALL_APPS
+}
 
 enum class RuleType {
     DATE_RANGE,

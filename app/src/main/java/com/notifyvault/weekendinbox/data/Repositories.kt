@@ -2,6 +2,7 @@ package com.notifyvault.weekendinbox.data
 
 import android.content.Context
 import androidx.core.content.edit
+import com.notifyvault.weekendinbox.domain.CapturePolicy
 import com.notifyvault.weekendinbox.domain.RuleEngine
 import kotlinx.coroutines.flow.Flow
 
@@ -13,11 +14,22 @@ class RuleRepository(private val dao: RuleDao) {
     suspend fun byId(id: Long): RuleEntity? = dao.byId(id)
 }
 
+class SelectedAppsRepository(private val dao: SelectedAppDao) {
+    fun observeSelectedPackages(): Flow<List<String>> = dao.observeSelectedPackages()
+    suspend fun setSelected(packageName: String, selected: Boolean) {
+        if (selected) dao.upsert(SelectedAppEntity(packageName = packageName)) else dao.delete(packageName)
+    }
+
+    suspend fun isSelected(packageName: String): Boolean = dao.isSelected(packageName)
+}
+
 class NotificationRepository(
     private val dao: NotificationDao,
     private val ruleRepository: RuleRepository,
     private val ruleEngine: RuleEngine,
-    private val prefs: AppPrefs
+    private val prefs: AppPrefs,
+    private val selectedAppsRepository: SelectedAppsRepository,
+    private val capturePolicy: CapturePolicy = CapturePolicy()
 ) {
     fun observeVault(packageFilter: String?, fromDate: Long?, toDate: Long?, search: String?): Flow<List<CapturedNotificationEntity>> {
         return dao.observeAll(packageFilter, fromDate, toDate, search)
@@ -25,8 +37,19 @@ class NotificationRepository(
 
     fun observeKnownPackages(): Flow<List<String>> = dao.observeKnownPackages()
 
+    suspend fun shouldCapturePackage(packageName: String): Boolean {
+        val mode = prefs.captureMode()
+        val selected = if (mode == CaptureMode.ONLY_SELECTED_APPS) {
+            selectedAppsRepository.isSelected(packageName)
+        } else {
+            true
+        }
+        return capturePolicy.shouldCapturePackage(mode, selected)
+    }
+
     suspend fun tryCapture(entity: CapturedNotificationEntity): Boolean {
         if (!prefs.canCaptureNewNotifications()) return false
+        if (!shouldCapturePackage(entity.packageName)) return false
 
         val rules = ruleRepository.activeRules()
         if (!ruleEngine.shouldCapture(entity.capturedAt, entity.packageName, rules)) return false
@@ -72,6 +95,15 @@ class AppPrefs(context: Context) {
         prefs.edit { putBoolean(KEY_ONBOARDED, true) }
     }
 
+    fun captureMode(): CaptureMode {
+        val raw = prefs.getString(KEY_CAPTURE_MODE, CaptureMode.ONLY_SELECTED_APPS.name)
+        return CaptureMode.entries.firstOrNull { it.name == raw } ?: CaptureMode.ONLY_SELECTED_APPS
+    }
+
+    fun setCaptureMode(mode: CaptureMode) {
+        prefs.edit { putString(KEY_CAPTURE_MODE, mode.name) }
+    }
+
     fun canCaptureNewNotifications(now: Long = System.currentTimeMillis()): Boolean {
         if (isPro()) return true
         val first = ensureFirstLaunch()
@@ -84,5 +116,6 @@ class AppPrefs(context: Context) {
         private const val KEY_PRO = "is_pro"
         private const val KEY_ACCESS_DISABLED = "access_disabled"
         private const val KEY_ONBOARDED = "onboarded"
+        private const val KEY_CAPTURE_MODE = "capture_mode"
     }
 }

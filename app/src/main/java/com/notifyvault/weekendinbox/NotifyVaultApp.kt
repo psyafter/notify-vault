@@ -7,6 +7,7 @@ import androidx.work.WorkManager
 import com.notifyvault.weekendinbox.data.AppDatabase
 import com.notifyvault.weekendinbox.data.AppPrefs
 import com.notifyvault.weekendinbox.data.NotificationRepository
+import com.notifyvault.weekendinbox.data.SelectedAppsRepository
 import com.notifyvault.weekendinbox.data.RuleRepository
 import com.notifyvault.weekendinbox.domain.RuleEngine
 import com.notifyvault.weekendinbox.worker.AccessHealthWorker
@@ -36,5 +37,6 @@ class AppContainer(application: Application) {
     val prefs = AppPrefs(application)
     private val ruleEngine = RuleEngine()
     val ruleRepository = RuleRepository(db.ruleDao())
-    val notificationRepository = NotificationRepository(db.notificationDao(), ruleRepository, ruleEngine, prefs)
+    val selectedAppsRepository = SelectedAppsRepository(db.selectedAppDao())
+    val notificationRepository = NotificationRepository(db.notificationDao(), ruleRepository, ruleEngine, prefs, selectedAppsRepository)
 }
