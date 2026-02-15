@@ -67,3 +67,18 @@ interface RuleDao {
     @Query("SELECT * FROM capture_rules WHERE id = :id")
     suspend fun byId(id: Long): RuleEntity?
 }
+
+@Dao
+interface SelectedAppDao {
+    @Insert(onConflict = OnConflictStrategy.REPLACE)
+    suspend fun upsert(entity: SelectedAppEntity)
+
+    @Query("DELETE FROM selected_apps WHERE packageName = :packageName")
+    suspend fun delete(packageName: String)
+
+    @Query("SELECT packageName FROM selected_apps ORDER BY packageName")
+    fun observeSelectedPackages(): Flow<List<String>>
+
+    @Query("SELECT EXISTS(SELECT 1 FROM selected_apps WHERE packageName = :packageName)")
+    suspend fun isSelected(packageName: String): Boolean
+}
