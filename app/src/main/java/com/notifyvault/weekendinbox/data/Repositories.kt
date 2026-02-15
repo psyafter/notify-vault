@@ -64,6 +64,7 @@ class NotificationRepository(
 
     suspend fun markHandled(id: Long) = dao.markHandled(id)
     suspend fun delete(id: Long) = dao.deleteById(id)
+    suspend fun restore(entity: CapturedNotificationEntity) = dao.insert(entity)
 }
 
 class AppPrefs(context: Context) {
@@ -111,11 +112,27 @@ class AppPrefs(context: Context) {
         return now - first <= graceMillis
     }
 
+    fun swipeActionMode(): SwipeActionMode {
+        return SwipeActionMode.fromStorage(prefs.getString(KEY_SWIPE_ACTION_MODE, SwipeActionMode.SWIPE_IMMEDIATE_DELETE.name))
+    }
+
+    fun setSwipeActionMode(mode: SwipeActionMode) {
+        prefs.edit { putString(KEY_SWIPE_ACTION_MODE, mode.name) }
+    }
+
+    fun dismissSystemOnDeleteEnabled(): Boolean = prefs.getBoolean(KEY_DISMISS_SYSTEM_ON_DELETE, false)
+
+    fun setDismissSystemOnDeleteEnabled(enabled: Boolean) {
+        prefs.edit { putBoolean(KEY_DISMISS_SYSTEM_ON_DELETE, enabled) }
+    }
+
     companion object {
         private const val KEY_FIRST_LAUNCH = "first_launch"
         private const val KEY_PRO = "is_pro"
         private const val KEY_ACCESS_DISABLED = "access_disabled"
         private const val KEY_ONBOARDED = "onboarded"
         private const val KEY_CAPTURE_MODE = "capture_mode"
+        private const val KEY_SWIPE_ACTION_MODE = "swipe_action_mode"
+        private const val KEY_DISMISS_SYSTEM_ON_DELETE = "dismiss_system_on_delete"
     }
 }
