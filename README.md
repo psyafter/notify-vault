@@ -1,4 +1,4 @@
-# NotifyVault: Weekend Inbox
+# NotifyVault
 
 NotifyVault captures notifications only when user rules are active, then stores them locally for later review.
 
