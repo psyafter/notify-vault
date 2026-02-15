@@ -1,0 +1,59 @@
+# NotifyVault: Weekend Inbox
+
+NotifyVault captures notifications only when user rules are active, then stores them locally for later review.
+
+## Tech Stack
+- Kotlin + Gradle (Android app)
+- Jetpack Compose UI
+- Room for local persistence (`notify_vault.db`)
+- WorkManager periodic health check for notification access state
+- Fully offline, no network permissions
+
+## Build & Run
+1. Open project in Android Studio Iguana+.
+2. Sync Gradle.
+3. Run `app` on Android 8.0+ (API 26+).
+4. On first launch, open Notification Access settings and enable NotifyVault.
+
+## Where data is stored
+- Room database file: `notify_vault.db`
+- Table `captured_notifications`: vault records
+- Table `capture_rules`: date range + repeating weekend rules
+- SharedPreferences (`notifyvault_prefs`): onboarding/pro/access health flags
+
+## Capture flow
+1. `VaultNotificationListenerService.onNotificationPosted` receives posted notifications.
+2. Notification payload is normalized and hashed.
+3. `NotificationRepository.tryCapture` checks:
+   - 14-day paywall gate unless `isPro=true`
+   - any active rule matches current time + package filter
+   - de-dup against latest captured notification hash/package
+4. If eligible, entity is saved in Room.
+
+## Rules
+- `DATE_RANGE`: start and end timestamps in local time (stored as epoch millis)
+- `WEEKEND_REPEAT`: repeat on configured day numbers (`1..7`, ISO day-of-week)
+- Per rule:
+  - `isActive`
+  - `appFilterMode`: `ALL_EXCEPT` or `ONLY_SELECTED`
+  - `selectedPackagesCsv`
+
+## Health reliability
+- `AccessHealthWorker` runs every 6 hours.
+- If notification access is disabled:
+  - writes disabled state to prefs
+  - emits a simple local reminder notification
+
+## OEM caveats
+- Some OEMs aggressively stop background services/work.
+- If capture appears unreliable, users should:
+  - disable battery optimization for NotifyVault
+  - keep notification access enabled
+  - allow autostart/background activity where applicable
+
+## Tests
+- Unit tests cover `RuleEngine` for:
+  - date range inclusion
+  - weekend day matching
+  - timezone behavior
+  - package filter mode behavior
