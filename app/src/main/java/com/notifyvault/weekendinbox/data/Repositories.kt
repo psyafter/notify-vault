@@ -120,12 +120,6 @@ class AppPrefs(context: Context) {
         prefs.edit { putString(KEY_SWIPE_ACTION_MODE, mode.name) }
     }
 
-    fun dismissSystemOnDeleteEnabled(): Boolean = prefs.getBoolean(KEY_DISMISS_SYSTEM_ON_DELETE, false)
-
-    fun setDismissSystemOnDeleteEnabled(enabled: Boolean) {
-        prefs.edit { putBoolean(KEY_DISMISS_SYSTEM_ON_DELETE, enabled) }
-    }
-
     companion object {
         private const val KEY_FIRST_LAUNCH = "first_launch"
         private const val KEY_PRO = "is_pro"
@@ -133,6 +127,5 @@ class AppPrefs(context: Context) {
         private const val KEY_ONBOARDED = "onboarded"
         private const val KEY_CAPTURE_MODE = "capture_mode"
         private const val KEY_SWIPE_ACTION_MODE = "swipe_action_mode"
-        private const val KEY_DISMISS_SYSTEM_ON_DELETE = "dismiss_system_on_delete"
     }
 }
