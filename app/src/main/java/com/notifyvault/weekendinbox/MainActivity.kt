@@ -1,5 +1,6 @@
 package com.notifyvault.weekendinbox
 
+import android.Manifest
 import android.content.Intent
 import android.content.pm.PackageManager
 import android.graphics.Bitmap
@@ -64,6 +65,7 @@ import androidx.compose.ui.graphics.ImageBitmap
 import androidx.compose.ui.graphics.asImageBitmap
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
+import androidx.core.content.ContextCompat
 import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.ViewModelProvider
@@ -81,9 +83,11 @@ import com.notifyvault.weekendinbox.domain.OpenPath
 import com.notifyvault.weekendinbox.service.VaultNotificationListenerService
 import com.notifyvault.weekendinbox.util.hasNotificationAccess
 import com.notifyvault.weekendinbox.util.hasPostNotificationsPermission
+import com.notifyvault.weekendinbox.util.isBackgroundRestricted
 import com.notifyvault.weekendinbox.util.isIgnoringBatteryOptimizations
 import com.notifyvault.weekendinbox.util.manufacturerTips
 import com.notifyvault.weekendinbox.util.openAppInfoSettings
+import com.notifyvault.weekendinbox.util.openAppNotificationSettings
 import com.notifyvault.weekendinbox.util.openBatteryOptimizationSettings
 import com.notifyvault.weekendinbox.util.openManufacturerSettings
 import com.notifyvault.weekendinbox.util.openNotificationListenerSettings
@@ -302,7 +306,7 @@ fun NotifyVaultAppUi(vm: MainViewModel, openAccessSettings: () -> Unit) {
                 Button(onClick = { showSelectApps = true }) { Text("Select apps") }
                 Text("Selected: ${selectedApps.size}")
             } else {
-                HealthCheckTab()
+                HealthCheckTab(ruleCount = rules.size)
             }
         }
 
@@ -317,13 +321,14 @@ fun NotifyVaultAppUi(vm: MainViewModel, openAccessSettings: () -> Unit) {
 }
 
 @Composable
-private fun HealthCheckTab() {
+private fun HealthCheckTab(ruleCount: Int) {
     val context = LocalContext.current
     val lifecycleOwner = LocalLifecycleOwner.current
     var notificationAccessEnabled by remember { mutableStateOf(hasNotificationAccess(context)) }
     var batteryExempt by remember { mutableStateOf(isIgnoringBatteryOptimizations(context)) }
     var notificationsPermissionGranted by remember { mutableStateOf(hasPostNotificationsPermission(context)) }
-    var manufacturerSettingsMessage by remember { mutableStateOf<String?>(null) }
+    var backgroundRestricted by remember { mutableStateOf(isBackgroundRestricted(context)) }
+    var actionMessage by remember { mutableStateOf<String?>(null) }
     val tips = remember { manufacturerTips() }
     val requestNotificationsPermission = rememberLauncherForActivityResult(ActivityResultContracts.RequestPermission()) {
         notificationsPermissionGranted = hasPostNotificationsPermission(context)
@@ -333,6 +338,36 @@ private fun HealthCheckTab() {
         notificationAccessEnabled = hasNotificationAccess(context)
         batteryExempt = isIgnoringBatteryOptimizations(context)
         notificationsPermissionGranted = hasPostNotificationsPermission(context)
+        backgroundRestricted = isBackgroundRestricted(context)
+    }
+
+    fun statusText(ok: Boolean): String = if (ok) "🟢 OK" else "🔴 Needs attention"
+
+    fun diagnosticsText(): String {
+        return buildString {
+            appendLine("NotifyVault quick diagnostics")
+            appendLine("manufacturer=${Build.MANUFACTURER}")
+            appendLine("sdk=${Build.VERSION.SDK_INT}")
+            appendLine("notification_listener=$notificationAccessEnabled")
+            appendLine("post_notifications=$notificationsPermissionGranted")
+            appendLine("battery_optimization_ignored=$batteryExempt")
+            appendLine("background_restricted=$backgroundRestricted")
+            appendLine("rules_count=$ruleCount")
+            appendLine("timestamp=${System.currentTimeMillis()}")
+        }
+    }
+
+    fun shareDiagnostics() {
+        val intent = Intent(Intent.ACTION_SEND).apply {
+            type = "text/plain"
+            putExtra(Intent.EXTRA_SUBJECT, "NotifyVault diagnostics")
+            putExtra(Intent.EXTRA_TEXT, diagnosticsText())
+        }
+        runCatching {
+            context.startActivity(Intent.createChooser(intent, "Share diagnostics").addFlags(Intent.FLAG_ACTIVITY_NEW_TASK))
+        }.onFailure {
+            actionMessage = "Unable to open share menu on this device."
+        }
     }
 
     DisposableEffect(lifecycleOwner) {
@@ -346,82 +381,110 @@ private fun HealthCheckTab() {
     }
 
     Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
-        Text("Health check", style = MaterialTheme.typography.titleLarge)
+        Text("Health / Fix setup", style = MaterialTheme.typography.titleLarge)
 
         Card(modifier = Modifier.fillMaxWidth()) {
             Column(modifier = Modifier.padding(12.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
-                Text("Notification Access", fontWeight = FontWeight.Bold)
-                Text(if (notificationAccessEnabled) "Enabled" else "Disabled")
+                Text("A) Notification Listener", fontWeight = FontWeight.Bold)
+                Text(statusText(notificationAccessEnabled))
                 Button(onClick = {
-                    openNotificationListenerSettings(context)
-                }) {
-                    Text("Open notification access")
+                    if (!openNotificationListenerSettings(context)) {
+                        actionMessage = "Could not open Notification Listener settings. Opened App info instead."
+                    }
+                }) { Text("Open notification listener settings") }
+            }
+        }
+
+        Card(modifier = Modifier.fillMaxWidth()) {
+            Column(modifier = Modifier.padding(12.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
+                Text("B) Notifications permission (Android 13+)", fontWeight = FontWeight.Bold)
+                Text(statusText(notificationsPermissionGranted))
+                Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                    Button(onClick = {
+                        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+                            requestNotificationsPermission.launch(Manifest.permission.POST_NOTIFICATIONS)
+                        } else {
+                            openAppNotificationSettings(context)
+                        }
+                    }) { Text("Request permission") }
+                    TextButton(onClick = {
+                        openAppNotificationSettings(context)
+                    }) { Text("Open app notification settings") }
                 }
             }
         }
 
         Card(modifier = Modifier.fillMaxWidth()) {
             Column(modifier = Modifier.padding(12.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
-                Text("Battery Optimization", fontWeight = FontWeight.Bold)
-                Text(if (batteryExempt) "Exempted (recommended)" else "Optimized (may break capture)")
+                Text("C) Battery optimization", fontWeight = FontWeight.Bold)
+                Text(statusText(batteryExempt))
                 Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                     Button(onClick = {
                         if (!requestIgnoreBatteryOptimization(context)) {
-                            openBatteryOptimizationSettings(context)
+                            actionMessage = "Direct exemption screen unavailable. Opened fallback settings."
                         }
-                    }) {
-                        Text("Request exemption")
-                    }
-                    Button(onClick = { openBatteryOptimizationSettings(context) }) {
-                        Text("Battery settings")
-                    }
+                    }) { Text("Request ignore optimization") }
+                    TextButton(onClick = {
+                        if (!openBatteryOptimizationSettings(context)) {
+                            actionMessage = "Battery optimization list unavailable. Opened App info instead."
+                        }
+                    }) { Text("Open optimization list") }
                 }
             }
         }
 
         Card(modifier = Modifier.fillMaxWidth()) {
             Column(modifier = Modifier.padding(12.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
-                Text("App notifications", fontWeight = FontWeight.Bold)
-                val permissionStatus = if (Build.VERSION.SDK_INT < Build.VERSION_CODES.TIRAMISU) {
-                    "Not required on this Android version"
-                } else if (notificationsPermissionGranted) {
-                    "Allowed"
-                } else {
-                    "Permission required"
-                }
-                Text(permissionStatus)
-                if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU && !notificationsPermissionGranted) {
-                    Button(onClick = {
-                        requestNotificationsPermission.launch(android.Manifest.permission.POST_NOTIFICATIONS)
-                    }) {
-                        Text("Request notifications permission")
-                    }
-                }
+                Text("D) Background restriction", fontWeight = FontWeight.Bold)
+                Text(if (backgroundRestricted) "🔴 Restricted on this device" else "🟢 Not restricted (best effort)")
+                Button(onClick = {
+                    openAppInfoSettings(context)
+                }) { Text("Open app details") }
             }
         }
 
         Card(modifier = Modifier.fillMaxWidth()) {
             Column(modifier = Modifier.padding(12.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
-                Text("Manufacturer tips", fontWeight = FontWeight.Bold)
+                Text("OEM tips", fontWeight = FontWeight.Bold)
                 Text(tips.title)
                 tips.steps.forEach { step -> Text("• $step") }
-                Button(onClick = {
-                    manufacturerSettingsMessage = if (openManufacturerSettings(context)) {
-                        "Opening manufacturer settings..."
-                    } else {
-                        openAppInfoSettings(context)
-                        "Manufacturer screen not available. Opened App Info instead."
-                    }
-                }) {
-                    Text("Open manufacturer settings")
+                Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                    Button(onClick = {
+                        if (openManufacturerSettings(context)) {
+                            actionMessage = "Opened manufacturer/app settings."
+                        } else {
+                            actionMessage = "Opened App info fallback."
+                        }
+                    }) { Text("Open OEM settings") }
+                    TextButton(onClick = {
+                        val text = (listOf(tips.title) + tips.steps.map { "- $it" }).joinToString("\n")
+                        val clipboard = ContextCompat.getSystemService(context, android.content.ClipboardManager::class.java)
+                        clipboard?.setPrimaryClip(android.content.ClipData.newPlainText("NotifyVault OEM instructions", text))
+                        actionMessage = "Instructions copied."
+                    }) { Text("Copy instructions") }
                 }
-                manufacturerSettingsMessage?.let { Text(it, color = MaterialTheme.colorScheme.primary) }
             }
         }
 
-        Button(onClick = { openAppInfoSettings(context) }) {
-            Text("Open App Info")
+        Card(modifier = Modifier.fillMaxWidth()) {
+            Column(modifier = Modifier.padding(12.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
+                Text("Quick diagnostics", fontWeight = FontWeight.Bold)
+                Text("Capture health snapshot and share with support.")
+                Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                    Button(onClick = {
+                        val report = diagnosticsText()
+                        android.util.Log.i("NotifyVaultDiagnostics", report)
+                        actionMessage = "Diagnostics logged locally."
+                    }) { Text("Log diagnostics") }
+                    TextButton(onClick = {
+                        android.util.Log.i("NotifyVaultDiagnostics", diagnosticsText())
+                        shareDiagnostics()
+                    }) { Text("Share diagnostics") }
+                }
+            }
         }
+
+        actionMessage?.let { Text(it, color = MaterialTheme.colorScheme.primary) }
     }
 }
 
