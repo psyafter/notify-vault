@@ -7,11 +7,14 @@ import androidx.work.WorkManager
 import com.notifyvault.weekendinbox.data.AppDatabase
 import com.notifyvault.weekendinbox.data.AppPrefs
 import com.notifyvault.weekendinbox.data.NotificationRepository
+import com.notifyvault.weekendinbox.data.BillingRepository
 import com.notifyvault.weekendinbox.data.SelectedAppsRepository
 import com.notifyvault.weekendinbox.data.RuleRepository
 import com.notifyvault.weekendinbox.domain.RuleEngine
 import com.notifyvault.weekendinbox.worker.AccessHealthWorker
 import java.util.concurrent.TimeUnit
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.SupervisorJob
 
 class NotifyVaultApp : Application() {
     lateinit var container: AppContainer
@@ -39,4 +42,6 @@ class AppContainer(application: Application) {
     val ruleRepository = RuleRepository(db.ruleDao())
     val selectedAppsRepository = SelectedAppsRepository(db.selectedAppDao())
     val notificationRepository = NotificationRepository(db.notificationDao(), ruleRepository, ruleEngine, prefs, selectedAppsRepository)
+    private val appScope = CoroutineScope(SupervisorJob())
+    val billingRepository = BillingRepository(application, prefs, appScope)
 }

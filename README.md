@@ -19,7 +19,7 @@ NotifyVault captures notifications only when user rules are active, then stores 
 - Room database file: `notify_vault.db`
 - Table `captured_notifications`: vault records
 - Table `capture_rules`: date range + repeating weekend rules
-- SharedPreferences (`notifyvault_prefs`): onboarding/pro/access health flags
+- DataStore Preferences (`notifyvault_prefs.preferences_pb`): onboarding/trial/pro/access health flags
 
 ## Capture flow
 1. `VaultNotificationListenerService.onNotificationPosted` receives posted notifications.
@@ -99,3 +99,16 @@ The **Fix setup** tab now includes actionable cards for:
 - Always-available App info fallback.
 - OEM-specific setup tips with **Copy instructions** and **Try open OEM settings** (safe fallback to App info).
 - **Share diagnostics** text report with listener/battery/permission/device/rule/app-selection fields.
+
+
+## Play release checklist
+- Configure signing for release build (`Build > Generate Signed Bundle / APK`).
+- App supports `minSdk=26`, `targetSdk=34`.
+- Add privacy policy in Play Console: notifications may contain sensitive content and are stored only on-device.
+- Permissions used:
+  - `POST_NOTIFICATIONS` (Android 13+ local reminder notifications)
+  - `BIND_NOTIFICATION_LISTENER_SERVICE` (capture access granted by user)
+  - `com.android.vending.BILLING` (one-time Pro purchase)
+
+## Known limitations
+- **Open source app** works best while the original notification is still active/recent. If unavailable, NotifyVault falls back to opening the app.

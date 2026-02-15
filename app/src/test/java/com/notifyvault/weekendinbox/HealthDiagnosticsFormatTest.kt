@@ -16,7 +16,10 @@ class HealthDiagnosticsFormatTest {
             model = "SM-S901B",
             sdk = 34,
             ruleCount = 3,
-            selectedAppsCount = 7
+            activeRuleCount = 2,
+            selectedAppsCount = 7,
+            proStatus = false,
+            trialDaysLeft = 4
         )
 
         assertTrue(report.contains("listener_enabled=true"))
@@ -26,6 +29,9 @@ class HealthDiagnosticsFormatTest {
         assertTrue(report.contains("model=SM-S901B"))
         assertTrue(report.contains("sdk=34"))
         assertTrue(report.contains("rules_count=3"))
+        assertTrue(report.contains("active_rules_count=2"))
         assertTrue(report.contains("selected_apps_count=7"))
+        assertTrue(report.contains("pro_status=false"))
+        assertTrue(report.contains("trial_days_left=4"))
     }
 }
