@@ -19,4 +19,10 @@ class SwipeActionModeTest {
             SwipeActionMode.fromStorage(SwipeActionMode.SWIPE_REVEAL_DELETE.name)
         )
     }
+
+    @Test
+    fun persistsUsingEnumNameContract() {
+        val storedValue = SwipeActionMode.SWIPE_IMMEDIATE_DELETE.name
+        assertEquals(SwipeActionMode.SWIPE_IMMEDIATE_DELETE, SwipeActionMode.fromStorage(storedValue))
+    }
 }

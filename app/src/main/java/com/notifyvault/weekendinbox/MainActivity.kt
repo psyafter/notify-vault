@@ -24,11 +24,13 @@ import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.weight
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.text.selection.SelectionContainer
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Add
 import androidx.compose.material.icons.filled.Delete
 import androidx.compose.material.icons.filled.Done
 import androidx.compose.material.icons.filled.Edit
+import androidx.compose.material.icons.filled.KeyboardArrowDown
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.AssistChip
 import androidx.compose.material3.Button
@@ -61,6 +63,7 @@ import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.rotate
 import androidx.compose.ui.graphics.ImageBitmap
 import androidx.compose.ui.graphics.asImageBitmap
 import androidx.compose.ui.text.font.FontWeight
@@ -162,9 +165,6 @@ class MainViewModel(app: NotifyVaultApp, private val container: AppContainer) : 
     fun markHandled(id: Long) = viewModelScope.launch { container.notificationRepository.markHandled(id) }
 
     fun deleteNotification(item: CapturedNotificationEntity) = viewModelScope.launch {
-        if (container.prefs.dismissSystemOnDeleteEnabled()) {
-            VaultNotificationListenerService.cancelActiveNotificationBestEffort(item.notificationKey)
-        }
         container.notificationRepository.delete(item.id)
     }
 
@@ -174,9 +174,6 @@ class MainViewModel(app: NotifyVaultApp, private val container: AppContainer) : 
 
     fun swipeActionMode(): SwipeActionMode = container.prefs.swipeActionMode()
     fun setSwipeActionMode(mode: SwipeActionMode) = container.prefs.setSwipeActionMode(mode)
-    fun dismissSystemOnDeleteEnabled(): Boolean = container.prefs.dismissSystemOnDeleteEnabled()
-    fun setDismissSystemOnDeleteEnabled(enabled: Boolean) = container.prefs.setDismissSystemOnDeleteEnabled(enabled)
-
     fun setAppSelected(packageName: String, selected: Boolean) = viewModelScope.launch {
         container.selectedAppsRepository.setSelected(packageName, selected)
     }
@@ -262,20 +259,23 @@ fun NotifyVaultAppUi(vm: MainViewModel, openAccessSettings: () -> Unit) {
                 LazyColumn {
                     items(notifications, key = { it.id }) { item ->
                         val isExpanded = expandedNotificationId == item.id
-                        val dismissState = androidx.compose.material3.rememberSwipeToDismissBoxState(confirmValueChange = {
-                            if (it == SwipeToDismissBoxValue.EndToStart && swipeMode == SwipeActionMode.SWIPE_IMMEDIATE_DELETE) {
-                                vm.deleteNotification(item)
-                                scope.launch {
-                                    val result = snackbar.showSnackbar("Deleted", actionLabel = "Undo")
-                                    if (result == androidx.compose.material3.SnackbarResult.ActionPerformed) {
-                                        vm.restoreNotification(item)
+                        val dismissState = androidx.compose.material3.rememberSwipeToDismissBoxState(
+                            positionalThreshold = { distance -> distance * 0.45f },
+                            confirmValueChange = {
+                                if (it == SwipeToDismissBoxValue.EndToStart && swipeMode == SwipeActionMode.SWIPE_IMMEDIATE_DELETE) {
+                                    vm.deleteNotification(item)
+                                    scope.launch {
+                                        val result = snackbar.showSnackbar("Deleted", actionLabel = "Undo")
+                                        if (result == androidx.compose.material3.SnackbarResult.ActionPerformed) {
+                                            vm.restoreNotification(item)
+                                        }
                                     }
+                                    true
+                                } else {
+                                    false
                                 }
-                                true
-                            } else {
-                                false
                             }
-                        })
+                        )
 
                         SwipeToDismissBox(
                             state = dismissState,
@@ -306,10 +306,19 @@ fun NotifyVaultAppUi(vm: MainViewModel, openAccessSettings: () -> Unit) {
                                 Column(Modifier.padding(12.dp)) {
                                     Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
                                         Text(item.packageName, fontWeight = FontWeight.Bold, modifier = Modifier.weight(1f))
-                                        Text(if (isExpanded) "▲" else "▼")
+                                        Icon(Icons.Default.KeyboardArrowDown, contentDescription = if (isExpanded) "Collapse" else "Expand", modifier = Modifier.rotate(if (isExpanded) 180f else 0f))
                                     }
-                                    Text(item.title ?: "(no title)", maxLines = if (isExpanded) Int.MAX_VALUE else 1)
-                                    Text(item.text ?: "", maxLines = if (isExpanded) Int.MAX_VALUE else 1)
+                                    if (isExpanded) {
+                                        SelectionContainer {
+                                            Column {
+                                                Text(item.title ?: "(no title)")
+                                                Text(item.text ?: "")
+                                            }
+                                        }
+                                    } else {
+                                        Text(item.title ?: "(no title)", maxLines = 1)
+                                        Text(item.text ?: "", maxLines = 1)
+                                    }
                                     if (isExpanded) {
                                         Text("Captured: ${formatter.format(Date(item.capturedAt))}")
                                         Text("App: ${item.appName ?: item.packageName}")
@@ -350,7 +359,6 @@ fun NotifyVaultAppUi(vm: MainViewModel, openAccessSettings: () -> Unit) {
                 }
             } else if (tab == 2) {
                 var swipeActionMode by remember { mutableStateOf(vm.swipeActionMode()) }
-                var dismissSystemOnDelete by remember { mutableStateOf(vm.dismissSystemOnDeleteEnabled()) }
 
                 Text("Capture mode")
                 Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
@@ -379,17 +387,6 @@ fun NotifyVaultAppUi(vm: MainViewModel, openAccessSettings: () -> Unit) {
                     )
                 }
                 Text("Current swipe mode: ${swipeActionMode.name}")
-
-                Row(modifier = Modifier.fillMaxWidth().padding(top = 8.dp), horizontalArrangement = Arrangement.SpaceBetween) {
-                    Column(modifier = Modifier.weight(1f)) {
-                        Text("Also dismiss system notification")
-                        Text("Best effort: if active and key is available.")
-                    }
-                    Checkbox(checked = dismissSystemOnDelete, onCheckedChange = {
-                        dismissSystemOnDelete = it
-                        vm.setDismissSystemOnDeleteEnabled(it)
-                    })
-                }
             } else {
                 HealthCheckTab(ruleCount = rules.size, selectedAppsCount = selectedApps.size)
             }
@@ -425,8 +422,6 @@ private fun HealthCheckTab(ruleCount: Int, selectedAppsCount: Int) {
         notificationsPermissionGranted = hasPostNotificationsPermission(context)
         backgroundRestricted = isBackgroundRestricted(context)
     }
-
-    fun statusText(ok: Boolean): String = if (ok) "🟢 OK" else "🔴 Needs attention"
 
     fun diagnosticsText(): String {
         return formatDiagnosticsReport(
@@ -470,7 +465,7 @@ private fun HealthCheckTab(ruleCount: Int, selectedAppsCount: Int) {
         Card(modifier = Modifier.fillMaxWidth()) {
             Column(modifier = Modifier.padding(12.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
                 Text("A) Notification Listener", fontWeight = FontWeight.Bold)
-                Text(statusText(notificationAccessEnabled))
+                HealthStatusChip(ok = notificationAccessEnabled)
                 Button(onClick = {
                     if (!openNotificationListenerSettings(context)) {
                         actionMessage = "Could not open Notification Listener settings. Opened App info instead."
@@ -482,7 +477,7 @@ private fun HealthCheckTab(ruleCount: Int, selectedAppsCount: Int) {
         Card(modifier = Modifier.fillMaxWidth()) {
             Column(modifier = Modifier.padding(12.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
                 Text("B) Notifications permission (Android 13+)", fontWeight = FontWeight.Bold)
-                Text(statusText(notificationsPermissionGranted))
+                HealthStatusChip(ok = notificationsPermissionGranted)
                 Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                     Button(onClick = {
                         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
@@ -501,7 +496,7 @@ private fun HealthCheckTab(ruleCount: Int, selectedAppsCount: Int) {
         Card(modifier = Modifier.fillMaxWidth()) {
             Column(modifier = Modifier.padding(12.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
                 Text("C) Battery optimization", fontWeight = FontWeight.Bold)
-                Text(statusText(batteryExempt))
+                HealthStatusChip(ok = batteryExempt)
                 Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                     Button(onClick = {
                         if (!requestIgnoreBatteryOptimization(context)) {
@@ -520,7 +515,7 @@ private fun HealthCheckTab(ruleCount: Int, selectedAppsCount: Int) {
         Card(modifier = Modifier.fillMaxWidth()) {
             Column(modifier = Modifier.padding(12.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
                 Text("D) App details", fontWeight = FontWeight.Bold)
-                Text(if (backgroundRestricted) "🔴 Restricted on this device" else "🟢 Not restricted (best effort)")
+                HealthStatusChip(ok = !backgroundRestricted, okLabel = "Not restricted", warnLabel = "Restricted on this device")
                 Text("Always available fallback.")
                 Button(onClick = {
                     openAppInfoSettings(context)
@@ -561,6 +556,14 @@ private fun HealthCheckTab(ruleCount: Int, selectedAppsCount: Int) {
 
         actionMessage?.let { Text(it, color = MaterialTheme.colorScheme.primary) }
     }
+}
+
+
+@Composable
+private fun HealthStatusChip(ok: Boolean, okLabel: String = "OK", warnLabel: String = "Needs attention") {
+    AssistChip(onClick = {}, enabled = false, label = {
+        Text(if (ok) "🟢 $okLabel" else "🔴 $warnLabel")
+    })
 }
 
 @Composable

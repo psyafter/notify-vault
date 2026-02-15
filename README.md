@@ -84,9 +84,9 @@ NotifyVault only opens settings screens and never sends data over network for th
 - **Swipe action setting** in Settings:
   - `SWIPE_IMMEDIATE_DELETE` (default): swipe left deletes immediately and shows Undo snackbar.
   - `SWIPE_REVEAL_DELETE`: swipe left reveals a Delete action button; delete occurs only on tap.
-- **Optional system dismissal** setting:
-  - "Also dismiss system notification when deleting" (default off).
-  - Best effort via Notification Listener key cancel; Vault deletion still succeeds if cancel is unavailable.
+- **Local vault deletion only**:
+  - Deleting from Vault removes only the stored Room record inside NotifyVault.
+  - It does **not** dismiss or cancel real system notifications from the status bar/shade.
 - **Row expansion**:
   - Tap any vault row to expand/collapse full title/text and metadata.
   - Single-expanded-row behavior: opening one row collapses the previously expanded row.
