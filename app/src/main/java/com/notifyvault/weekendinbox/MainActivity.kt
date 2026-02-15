@@ -30,16 +30,21 @@ import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.AssistChip
 import androidx.compose.material3.Button
 import androidx.compose.material3.Card
+import androidx.compose.material3.CardDefaults
 import androidx.compose.material3.Checkbox
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.FloatingActionButton
 import androidx.compose.material3.Icon
+import androidx.compose.material3.RadioButton
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.SnackbarHost
+import androidx.compose.material3.SwipeToDismissBox
+import androidx.compose.material3.SwipeToDismissBoxValue
 import androidx.compose.material3.SnackbarHostState
 import androidx.compose.material3.Text
+import androidx.compose.material3.rememberSwipeToDismissBoxState
 import androidx.compose.material3.TextButton
 import androidx.compose.material3.TopAppBar
 import androidx.compose.runtime.Composable
@@ -48,6 +53,7 @@ import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberUpdatedState
 import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
@@ -68,6 +74,7 @@ import com.notifyvault.weekendinbox.data.CapturedNotificationEntity
 import com.notifyvault.weekendinbox.data.CaptureMode
 import com.notifyvault.weekendinbox.data.RuleEntity
 import com.notifyvault.weekendinbox.data.RuleType
+import com.notifyvault.weekendinbox.data.SwipeActionMode
 import com.notifyvault.weekendinbox.domain.OpenPath
 import com.notifyvault.weekendinbox.util.formatDiagnosticsReport
 import com.notifyvault.weekendinbox.util.hasNotificationAccess
@@ -110,6 +117,7 @@ class MainViewModel(app: NotifyVaultApp, private val container: AppContainer) : 
     var canCapture by mutableStateOf(true)
     var trialDaysLeft by mutableStateOf(14L)
     var showSetupTip by mutableStateOf(false)
+    var swipeActionMode by mutableStateOf(SwipeActionMode.SWIPE_REVEAL_DELETE)
 
     init {
         viewModelScope.launch {
@@ -118,6 +126,7 @@ class MainViewModel(app: NotifyVaultApp, private val container: AppContainer) : 
             canCapture = container.prefs.canCaptureNewNotifications()
             trialDaysLeft = container.prefs.trialDaysLeft()
             showSetupTip = container.prefs.shouldShowSetupTip()
+            swipeActionMode = container.prefs.swipeActionMode()
             ensureDefaultWeekendsRule()
             container.billingRepository.refreshPurchases()
         }
@@ -155,6 +164,11 @@ class MainViewModel(app: NotifyVaultApp, private val container: AppContainer) : 
     fun deleteNotification(item: CapturedNotificationEntity) = viewModelScope.launch { container.notificationRepository.delete(item.id) }
     fun restoreNotification(item: CapturedNotificationEntity) = viewModelScope.launch { container.notificationRepository.restore(item) }
     fun setAppSelected(packageName: String, selected: Boolean) = viewModelScope.launch { container.selectedAppsRepository.setSelected(packageName, selected) }
+
+    fun setSwipeActionMode(mode: SwipeActionMode) = viewModelScope.launch {
+        container.prefs.setSwipeActionMode(mode)
+        swipeActionMode = mode
+    }
     fun simulateCapture() = viewModelScope.launch {
         container.notificationRepository.restore(
             CapturedNotificationEntity(
@@ -192,7 +206,6 @@ class MainViewModel(app: NotifyVaultApp, private val container: AppContainer) : 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun NotifyVaultAppUi(vm: MainViewModel) {
-    val activity = LocalContext.current as ComponentActivity
     val notifications by vm.notifications.collectAsState()
     val selectedApps by vm.selectedApps.collectAsState()
     val rules by vm.rules.collectAsState()
@@ -209,7 +222,6 @@ fun NotifyVaultAppUi(vm: MainViewModel) {
 
     var tab by rememberSaveable { mutableStateOf(0) }
     var expandedId by rememberSaveable { mutableStateOf<Long?>(null) }
-    var deletedForUndo by remember { mutableStateOf<CapturedNotificationEntity?>(null) }
     var showSelectApps by remember { mutableStateOf(false) }
     val formatter = remember { SimpleDateFormat("yyyy-MM-dd HH:mm", Locale.getDefault()) }
 
@@ -242,7 +254,7 @@ fun NotifyVaultAppUi(vm: MainViewModel) {
 
             Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                 AssistChip(onClick = { tab = 0 }, label = { Text("Vault") })
-                AssistChip(onClick = { tab = 1 }, label = { Text("Paywall") })
+                AssistChip(onClick = { tab = 1 }, label = { Text("Settings") })
                 AssistChip(onClick = { tab = 2 }, label = { Text("Fix setup") })
             }
 
@@ -259,42 +271,35 @@ fun NotifyVaultAppUi(vm: MainViewModel) {
                     } else {
                         LazyColumn(verticalArrangement = Arrangement.spacedBy(6.dp)) {
                             items(notifications, key = { it.id }) { item ->
-                                Card(Modifier.fillMaxWidth().clickable { expandedId = if (expandedId == item.id) null else item.id }) {
-                                    Column(Modifier.padding(12.dp)) {
-                                        Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
-                                            Text(item.appName ?: item.packageName, fontWeight = FontWeight.Bold)
-                                            Icon(Icons.Default.KeyboardArrowDown, null, Modifier.rotate(if (expandedId == item.id) 180f else 0f))
+                                VaultNotificationRow(
+                                    item = item,
+                                    expanded = expandedId == item.id,
+                                    formatter = formatter,
+                                    swipeActionMode = vm.swipeActionMode,
+                                    onToggleExpanded = { expandedId = if (expandedId == item.id) null else item.id },
+                                    onOpenSource = {
+                                        if (vm.openSavedNotification(item) == OpenPath.APP_LAUNCH_FALLBACK) {
+                                            scope.launch { snackbar.showSnackbar("Opened app fallback.") }
                                         }
-                                        Text(item.title ?: "(no title)")
+                                    },
+                                    onDelete = {
                                         if (expandedId == item.id) {
-                                            Text(item.text ?: "")
-                                            Text("Captured: ${formatter.format(Date(item.capturedAt))}")
-                                            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                                                TextButton(onClick = {
-                                                    if (vm.openSavedNotification(item) == OpenPath.APP_LAUNCH_FALLBACK) {
-                                                        scope.launch { snackbar.showSnackbar("Opened app fallback.") }
-                                                    }
-                                                }) { Text("Open source app") }
-                                                IconButton(onClick = {
-                                                    deletedForUndo = item
-                                                    vm.deleteNotification(item)
-                                                    scope.launch {
-                                                        if (snackbar.showSnackbar("Deleted", actionLabel = "Undo") == androidx.compose.material3.SnackbarResult.ActionPerformed) {
-                                                            deletedForUndo?.let(vm::restoreNotification)
-                                                        }
-                                                        deletedForUndo = null
-                                                    }
-                                                }) { Icon(Icons.Default.Delete, null) }
+                                            expandedId = null
+                                        }
+                                        vm.deleteNotification(item)
+                                        scope.launch {
+                                            if (snackbar.showSnackbar("Deleted", actionLabel = "Undo") == androidx.compose.material3.SnackbarResult.ActionPerformed) {
+                                                vm.restoreNotification(item)
                                             }
                                         }
                                     }
-                                }
+                                )
                             }
                         }
                     }
                 }
 
-                1 -> PaywallSection(vm, billing)
+                1 -> SettingsSection(vm, billing)
                 else -> DiagnosticsSection(vm, rules.size, rules.count { it.isActive }, selectedApps.size, billing.isPro)
             }
         }
@@ -304,17 +309,156 @@ fun NotifyVaultAppUi(vm: MainViewModel) {
 }
 
 @Composable
-private fun PaywallSection(vm: MainViewModel, billing: com.notifyvault.weekendinbox.data.BillingState) {
+private fun SettingsSection(vm: MainViewModel, billing: com.notifyvault.weekendinbox.data.BillingState) {
     val activity = LocalContext.current as ComponentActivity
-    Card {
-        Column(Modifier.padding(12.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
-            Text("Unlock NotifyVault Pro", fontWeight = FontWeight.Bold)
-            Text("Benefits: unlimited capturing and unlimited rules")
-            Text(if (billing.isPro) "Pro active" else "14-day trial: ${vm.trialDaysLeft} day(s) left")
-            Button(onClick = { vm.launchPurchase(activity) }, enabled = !billing.isPro) {
-                Text("Buy Pro")
+    Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+        Card {
+            Column(Modifier.padding(12.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                Text("Swipe action", fontWeight = FontWeight.Bold)
+                SwipeActionMode.entries.forEach { mode ->
+                    val label = when (mode) {
+                        SwipeActionMode.SWIPE_REVEAL_DELETE -> "Reveal delete (safe)"
+                        SwipeActionMode.SWIPE_IMMEDIATE_DELETE -> "Swipe deletes immediately (fast)"
+                    }
+                    Row(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .clickable { vm.setSwipeActionMode(mode) }
+                            .padding(vertical = 4.dp),
+                        horizontalArrangement = Arrangement.spacedBy(8.dp)
+                    ) {
+                        RadioButton(selected = vm.swipeActionMode == mode, onClick = { vm.setSwipeActionMode(mode) })
+                        Text(label)
+                    }
+                }
             }
-            TextButton(onClick = vm::restorePurchases) { Text("Restore purchases") }
+        }
+
+        Card {
+            Column(Modifier.padding(12.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                Text("Unlock NotifyVault Pro", fontWeight = FontWeight.Bold)
+                Text("Benefits: unlimited capturing and unlimited rules")
+                Text(if (billing.isPro) "Pro active" else "14-day trial: ${vm.trialDaysLeft} day(s) left")
+                Button(onClick = { vm.launchPurchase(activity) }, enabled = !billing.isPro) {
+                    Text("Buy Pro")
+                }
+                TextButton(onClick = vm::restorePurchases) { Text("Restore purchases") }
+            }
+        }
+    }
+}
+
+
+@Composable
+private fun VaultNotificationRow(
+    item: CapturedNotificationEntity,
+    expanded: Boolean,
+    formatter: SimpleDateFormat,
+    swipeActionMode: SwipeActionMode,
+    onToggleExpanded: () -> Unit,
+    onOpenSource: () -> Unit,
+    onDelete: () -> Unit
+) {
+    val mode by rememberUpdatedState(swipeActionMode)
+    var deleteTriggered by remember(item.id) { mutableStateOf(false) }
+    var revealDeleteAction by remember(item.id) { mutableStateOf(false) }
+    val dismissState = rememberSwipeToDismissBoxState(
+        confirmValueChange = { target ->
+            if (target != SwipeToDismissBoxValue.EndToStart || deleteTriggered) return@rememberSwipeToDismissBoxState false
+            if (mode == SwipeActionMode.SWIPE_IMMEDIATE_DELETE) {
+                deleteTriggered = true
+                onDelete()
+            } else {
+                revealDeleteAction = true
+            }
+            false
+        },
+        positionalThreshold = { totalDistance ->
+            totalDistance * if (mode == SwipeActionMode.SWIPE_IMMEDIATE_DELETE) 0.7f else 0.45f
+        }
+    )
+
+    LaunchedEffect(mode, item.id) {
+        if (mode == SwipeActionMode.SWIPE_IMMEDIATE_DELETE) {
+            revealDeleteAction = false
+        }
+    }
+
+    Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
+        SwipeToDismissBox(
+            state = dismissState,
+            enableDismissFromStartToEnd = false,
+            enableDismissFromEndToStart = true,
+            backgroundContent = {
+                Card(
+                    modifier = Modifier
+                        .fillMaxSize()
+                        .padding(horizontal = 2.dp),
+                    colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.errorContainer)
+                ) {
+                    Row(
+                        modifier = Modifier
+                            .fillMaxSize()
+                            .padding(horizontal = 12.dp),
+                        horizontalArrangement = Arrangement.End
+                    ) {
+                        Icon(
+                            Icons.Default.Delete,
+                            contentDescription = "Delete notification",
+                            tint = MaterialTheme.colorScheme.onErrorContainer
+                        )
+                    }
+                }
+            }
+        ) {
+            Card(Modifier.fillMaxWidth().clickable {
+                if (revealDeleteAction) {
+                    revealDeleteAction = false
+                } else {
+                    onToggleExpanded()
+                }
+            }) {
+                Column(Modifier.padding(12.dp)) {
+                    Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
+                        Text(item.appName ?: item.packageName, fontWeight = FontWeight.Bold)
+                        Icon(Icons.Default.KeyboardArrowDown, null, Modifier.rotate(if (expanded) 180f else 0f))
+                    }
+                    Text(item.title ?: "(no title)")
+                    if (expanded) {
+                        Text(item.text ?: "")
+                        Text("Captured: ${formatter.format(Date(item.capturedAt))}")
+                        Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                            TextButton(onClick = onOpenSource) { Text("Open source app") }
+                            IconButton(onClick = {
+                                deleteTriggered = true
+                                onDelete()
+                            }) { Icon(Icons.Default.Delete, contentDescription = "Delete notification") }
+                        }
+                    }
+                }
+            }
+        }
+
+        if (mode == SwipeActionMode.SWIPE_REVEAL_DELETE && revealDeleteAction) {
+            Card(Modifier.fillMaxWidth(), colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.errorContainer)) {
+                Row(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(horizontal = 8.dp),
+                    horizontalArrangement = Arrangement.End
+                ) {
+                    IconButton(onClick = {
+                        deleteTriggered = true
+                        onDelete()
+                    }) {
+                        Icon(
+                            Icons.Default.Delete,
+                            contentDescription = "Delete notification",
+                            tint = MaterialTheme.colorScheme.onErrorContainer
+                        )
+                    }
+                }
+            }
         }
     }
 }

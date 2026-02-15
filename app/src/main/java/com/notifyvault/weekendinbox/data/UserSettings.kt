@@ -6,7 +6,7 @@ enum class SwipeActionMode {
 
     companion object {
         fun fromStorage(raw: String?): SwipeActionMode {
-            return entries.firstOrNull { it.name == raw } ?: SWIPE_IMMEDIATE_DELETE
+            return entries.firstOrNull { it.name == raw } ?: SWIPE_REVEAL_DELETE
         }
     }
 }
