@@ -44,12 +44,33 @@ NotifyVault captures notifications only when user rules are active, then stores 
   - writes disabled state to prefs
   - emits a simple local reminder notification
 
-## OEM caveats
-- Some OEMs aggressively stop background services/work.
-- If capture appears unreliable, users should:
-  - disable battery optimization for NotifyVault
-  - keep notification access enabled
-  - allow autostart/background activity where applicable
+## OEM battery restrictions and setup
+- Open **Fix setup** in the app to run a local/offline health check.
+- Verify these statuses are green:
+  - Notification Access is enabled for NotifyVault
+  - Battery optimization exemption is enabled (`Don't optimize` / unrestricted)
+  - App notifications permission is granted on Android 13+
+- Use the built-in buttons to open the nearest settings page:
+  - Notification listener settings
+  - Request battery optimization exemption
+  - Battery optimization settings
+  - App info fallback
+
+### Manufacturer tips (best effort)
+- **Xiaomi / Redmi / POCO (MIUI/HyperOS)**
+  - Enable **Autostart** for NotifyVault
+  - Set battery mode to **No restrictions**
+- **Samsung (One UI)**
+  - Set battery usage to **Unrestricted**
+  - Disable **Put unused apps to sleep** for NotifyVault
+- **Huawei / Honor**
+  - Allow **Auto-launch**
+  - Disable automatic battery management for NotifyVault
+- **OnePlus / Oppo / Realme / Vivo**
+  - Allow auto-start/background activity
+  - Disable battery optimization
+
+NotifyVault only opens settings screens and never sends data over network for this flow.
 
 ## Tests
 - Unit tests cover `RuleEngine` for:

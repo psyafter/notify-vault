@@ -5,8 +5,11 @@ import android.content.pm.PackageManager
 import android.graphics.Bitmap
 import android.graphics.Canvas
 import android.graphics.drawable.Drawable
+import android.os.Build
 import android.os.Bundle
 import android.provider.Settings
+import androidx.activity.compose.rememberLauncherForActivityResult
+import androidx.activity.result.contract.ActivityResultContracts
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
 import androidx.compose.foundation.clickable
@@ -46,6 +49,7 @@ import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.material3.TopAppBar
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
@@ -54,6 +58,7 @@ import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.ImageBitmap
 import androidx.compose.ui.graphics.asImageBitmap
@@ -63,6 +68,9 @@ import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.ViewModelProvider
 import androidx.lifecycle.viewModelScope
+import androidx.lifecycle.Lifecycle
+import androidx.lifecycle.LifecycleEventObserver
+import androidx.lifecycle.compose.LocalLifecycleOwner
 import com.notifyvault.weekendinbox.data.AppContainer
 import com.notifyvault.weekendinbox.data.AppFilterMode
 import com.notifyvault.weekendinbox.data.CaptureMode
@@ -72,6 +80,14 @@ import com.notifyvault.weekendinbox.data.RuleType
 import com.notifyvault.weekendinbox.domain.OpenPath
 import com.notifyvault.weekendinbox.service.VaultNotificationListenerService
 import com.notifyvault.weekendinbox.util.hasNotificationAccess
+import com.notifyvault.weekendinbox.util.hasPostNotificationsPermission
+import com.notifyvault.weekendinbox.util.isIgnoringBatteryOptimizations
+import com.notifyvault.weekendinbox.util.manufacturerTips
+import com.notifyvault.weekendinbox.util.openAppInfoSettings
+import com.notifyvault.weekendinbox.util.openBatteryOptimizationSettings
+import com.notifyvault.weekendinbox.util.openManufacturerSettings
+import com.notifyvault.weekendinbox.util.openNotificationListenerSettings
+import com.notifyvault.weekendinbox.util.requestIgnoreBatteryOptimization
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.StateFlow
@@ -196,7 +212,7 @@ fun NotifyVaultAppUi(vm: MainViewModel, openAccessSettings: () -> Unit) {
 
     Scaffold(
         topBar = {
-            TopAppBar(title = { Text(if (tab == 0) "Vault" else if (tab == 1) "Rules" else "Settings") }, actions = {
+            TopAppBar(title = { Text(when (tab) { 0 -> "Vault"; 1 -> "Rules"; 2 -> "Settings"; else -> "Fix setup" }) }, actions = {
                 if (!vm.isAccessEnabled()) TextButton(onClick = openAccessSettings) { Text("Enable access") }
             })
         },
@@ -210,6 +226,7 @@ fun NotifyVaultAppUi(vm: MainViewModel, openAccessSettings: () -> Unit) {
                 AssistChip(onClick = { tab = 0 }, label = { Text("Vault") })
                 AssistChip(onClick = { tab = 1 }, label = { Text("Rules") })
                 AssistChip(onClick = { tab = 2 }, label = { Text("Settings") })
+                AssistChip(onClick = { tab = 3 }, label = { Text("Fix setup") })
             }
             if (tab == 0) {
                 OutlinedTextField(search, { search = it }, label = { Text("Search") }, modifier = Modifier.fillMaxWidth())
@@ -275,7 +292,7 @@ fun NotifyVaultAppUi(vm: MainViewModel, openAccessSettings: () -> Unit) {
                         }
                     }
                 }
-            } else {
+            } else if (tab == 2) {
                 Text("Capture mode")
                 Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                     AssistChip(onClick = { vm.setCaptureMode(CaptureMode.ONLY_SELECTED_APPS) }, label = { Text("Only selected apps") })
@@ -284,6 +301,8 @@ fun NotifyVaultAppUi(vm: MainViewModel, openAccessSettings: () -> Unit) {
                 Text("Current mode: ${vm.captureMode().name}")
                 Button(onClick = { showSelectApps = true }) { Text("Select apps") }
                 Text("Selected: ${selectedApps.size}")
+            } else {
+                HealthCheckTab()
             }
         }
 
@@ -293,6 +312,115 @@ fun NotifyVaultAppUi(vm: MainViewModel, openAccessSettings: () -> Unit) {
         }
         if (showSelectApps) {
             SelectAppsDialog(vm = vm, selectedApps = selectedApps, onDismiss = { showSelectApps = false })
+        }
+    }
+}
+
+@Composable
+private fun HealthCheckTab() {
+    val context = LocalContext.current
+    val lifecycleOwner = LocalLifecycleOwner.current
+    var notificationAccessEnabled by remember { mutableStateOf(hasNotificationAccess(context)) }
+    var batteryExempt by remember { mutableStateOf(isIgnoringBatteryOptimizations(context)) }
+    var notificationsPermissionGranted by remember { mutableStateOf(hasPostNotificationsPermission(context)) }
+    var manufacturerSettingsMessage by remember { mutableStateOf<String?>(null) }
+    val tips = remember { manufacturerTips() }
+    val requestNotificationsPermission = rememberLauncherForActivityResult(ActivityResultContracts.RequestPermission()) {
+        notificationsPermissionGranted = hasPostNotificationsPermission(context)
+    }
+
+    fun refreshState() {
+        notificationAccessEnabled = hasNotificationAccess(context)
+        batteryExempt = isIgnoringBatteryOptimizations(context)
+        notificationsPermissionGranted = hasPostNotificationsPermission(context)
+    }
+
+    DisposableEffect(lifecycleOwner) {
+        val observer = LifecycleEventObserver { _, event ->
+            if (event == Lifecycle.Event.ON_RESUME) {
+                refreshState()
+            }
+        }
+        lifecycleOwner.lifecycle.addObserver(observer)
+        onDispose { lifecycleOwner.lifecycle.removeObserver(observer) }
+    }
+
+    Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+        Text("Health check", style = MaterialTheme.typography.titleLarge)
+
+        Card(modifier = Modifier.fillMaxWidth()) {
+            Column(modifier = Modifier.padding(12.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
+                Text("Notification Access", fontWeight = FontWeight.Bold)
+                Text(if (notificationAccessEnabled) "Enabled" else "Disabled")
+                Button(onClick = {
+                    openNotificationListenerSettings(context)
+                }) {
+                    Text("Open notification access")
+                }
+            }
+        }
+
+        Card(modifier = Modifier.fillMaxWidth()) {
+            Column(modifier = Modifier.padding(12.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
+                Text("Battery Optimization", fontWeight = FontWeight.Bold)
+                Text(if (batteryExempt) "Exempted (recommended)" else "Optimized (may break capture)")
+                Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                    Button(onClick = {
+                        if (!requestIgnoreBatteryOptimization(context)) {
+                            openBatteryOptimizationSettings(context)
+                        }
+                    }) {
+                        Text("Request exemption")
+                    }
+                    Button(onClick = { openBatteryOptimizationSettings(context) }) {
+                        Text("Battery settings")
+                    }
+                }
+            }
+        }
+
+        Card(modifier = Modifier.fillMaxWidth()) {
+            Column(modifier = Modifier.padding(12.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
+                Text("App notifications", fontWeight = FontWeight.Bold)
+                val permissionStatus = if (Build.VERSION.SDK_INT < Build.VERSION_CODES.TIRAMISU) {
+                    "Not required on this Android version"
+                } else if (notificationsPermissionGranted) {
+                    "Allowed"
+                } else {
+                    "Permission required"
+                }
+                Text(permissionStatus)
+                if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU && !notificationsPermissionGranted) {
+                    Button(onClick = {
+                        requestNotificationsPermission.launch(android.Manifest.permission.POST_NOTIFICATIONS)
+                    }) {
+                        Text("Request notifications permission")
+                    }
+                }
+            }
+        }
+
+        Card(modifier = Modifier.fillMaxWidth()) {
+            Column(modifier = Modifier.padding(12.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
+                Text("Manufacturer tips", fontWeight = FontWeight.Bold)
+                Text(tips.title)
+                tips.steps.forEach { step -> Text("• $step") }
+                Button(onClick = {
+                    manufacturerSettingsMessage = if (openManufacturerSettings(context)) {
+                        "Opening manufacturer settings..."
+                    } else {
+                        openAppInfoSettings(context)
+                        "Manufacturer screen not available. Opened App Info instead."
+                    }
+                }) {
+                    Text("Open manufacturer settings")
+                }
+                manufacturerSettingsMessage?.let { Text(it, color = MaterialTheme.colorScheme.primary) }
+            }
+        }
+
+        Button(onClick = { openAppInfoSettings(context) }) {
+            Text("Open App Info")
         }
     }
 }
