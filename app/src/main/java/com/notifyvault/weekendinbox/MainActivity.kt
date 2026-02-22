@@ -13,9 +13,12 @@ import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
@@ -58,6 +61,8 @@ import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.Alignment
+import androidx.compose.ui.draw.clip
 import androidx.compose.ui.draw.rotate
 import androidx.compose.ui.graphics.ImageBitmap
 import androidx.compose.ui.graphics.asImageBitmap
@@ -103,6 +108,9 @@ class MainActivity : ComponentActivity() {
 class MainVmFactory(private val container: AppContainer, private val app: NotifyVaultApp) : ViewModelProvider.Factory {
     override fun <T : ViewModel> create(modelClass: Class<T>): T = MainViewModel(app, container) as T
 }
+
+private fun CapturedNotificationEntity.uiStableKey(): String =
+    "$notificationKey|$capturedAt|$contentHash"
 
 data class InstalledAppUi(val packageName: String, val label: String, val icon: Drawable?)
 
@@ -221,7 +229,7 @@ fun NotifyVaultAppUi(vm: MainViewModel) {
     }
 
     var tab by rememberSaveable { mutableStateOf(0) }
-    var expandedId by rememberSaveable { mutableStateOf<Long?>(null) }
+    var expandedStableKey by rememberSaveable { mutableStateOf<String?>(null) }
     var showSelectApps by remember { mutableStateOf(false) }
     val formatter = remember { SimpleDateFormat("yyyy-MM-dd HH:mm", Locale.getDefault()) }
 
@@ -270,21 +278,24 @@ fun NotifyVaultAppUi(vm: MainViewModel) {
                         } }
                     } else {
                         LazyColumn(verticalArrangement = Arrangement.spacedBy(6.dp)) {
-                            items(notifications, key = { it.id }) { item ->
+                            items(notifications, key = { it.uiStableKey() }) { item ->
                                 VaultNotificationRow(
                                     item = item,
-                                    expanded = expandedId == item.id,
+                                    expanded = expandedStableKey == item.uiStableKey(),
                                     formatter = formatter,
                                     swipeActionMode = vm.swipeActionMode,
-                                    onToggleExpanded = { expandedId = if (expandedId == item.id) null else item.id },
+                                    onToggleExpanded = {
+                                        val itemStableKey = item.uiStableKey()
+                                        expandedStableKey = if (expandedStableKey == itemStableKey) null else itemStableKey
+                                    },
                                     onOpenSource = {
                                         if (vm.openSavedNotification(item) == OpenPath.APP_LAUNCH_FALLBACK) {
                                             scope.launch { snackbar.showSnackbar("Opened app fallback.") }
                                         }
                                     },
                                     onDelete = {
-                                        if (expandedId == item.id) {
-                                            expandedId = null
+                                        if (expandedStableKey == item.uiStableKey()) {
+                                            expandedStableKey = null
                                         }
                                         vm.deleteNotification(item)
                                         scope.launch {
@@ -360,102 +371,85 @@ private fun VaultNotificationRow(
     onDelete: () -> Unit
 ) {
     val mode by rememberUpdatedState(swipeActionMode)
+    val scope = rememberCoroutineScope()
     var deleteTriggered by remember(item.id) { mutableStateOf(false) }
-    var revealDeleteAction by remember(item.id) { mutableStateOf(false) }
     val dismissState = rememberSwipeToDismissBoxState(
         confirmValueChange = { target ->
             if (target != SwipeToDismissBoxValue.EndToStart || deleteTriggered) return@rememberSwipeToDismissBoxState false
             if (mode == SwipeActionMode.SWIPE_IMMEDIATE_DELETE) {
                 deleteTriggered = true
                 onDelete()
+                false
             } else {
-                revealDeleteAction = true
+                true
             }
-            false
         },
         positionalThreshold = { totalDistance ->
-            totalDistance * if (mode == SwipeActionMode.SWIPE_IMMEDIATE_DELETE) 0.7f else 0.45f
+            totalDistance * if (mode == SwipeActionMode.SWIPE_IMMEDIATE_DELETE) 0.75f else 0.60f
         }
     )
 
-    LaunchedEffect(mode, item.id) {
-        if (mode == SwipeActionMode.SWIPE_IMMEDIATE_DELETE) {
-            revealDeleteAction = false
+    LaunchedEffect(mode) {
+        if (mode == SwipeActionMode.SWIPE_IMMEDIATE_DELETE && dismissState.currentValue != SwipeToDismissBoxValue.Settled) {
+            dismissState.reset()
         }
     }
 
-    Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
-        SwipeToDismissBox(
-            state = dismissState,
-            enableDismissFromStartToEnd = false,
-            enableDismissFromEndToStart = true,
-            backgroundContent = {
-                Card(
-                    modifier = Modifier
-                        .fillMaxSize()
-                        .padding(horizontal = 2.dp),
-                    colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.errorContainer)
-                ) {
-                    Row(
-                        modifier = Modifier
-                            .fillMaxSize()
-                            .padding(horizontal = 12.dp),
-                        horizontalArrangement = Arrangement.End
+    SwipeToDismissBox(
+        state = dismissState,
+        enableDismissFromStartToEnd = false,
+        enableDismissFromEndToStart = true,
+        backgroundContent = {
+            Box(
+                modifier = Modifier
+                    .fillMaxSize()
+                    .padding(horizontal = 2.dp)
+                    .clip(CardDefaults.shape)
+                    .background(MaterialTheme.colorScheme.errorContainer),
+                contentAlignment = Alignment.CenterEnd
+            ) {
+                if (mode == SwipeActionMode.SWIPE_REVEAL_DELETE) {
+                    TextButton(
+                        modifier = Modifier.padding(end = 8.dp),
+                        onClick = {
+                            deleteTriggered = true
+                            onDelete()
+                        }
                     ) {
                         Icon(
                             Icons.Default.Delete,
-                            contentDescription = "Delete notification",
+                            contentDescription = "Delete notification action",
                             tint = MaterialTheme.colorScheme.onErrorContainer
                         )
-                    }
-                }
-            }
-        ) {
-            Card(Modifier.fillMaxWidth().clickable {
-                if (revealDeleteAction) {
-                    revealDeleteAction = false
-                } else {
-                    onToggleExpanded()
-                }
-            }) {
-                Column(Modifier.padding(12.dp)) {
-                    Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
-                        Text(item.appName ?: item.packageName, fontWeight = FontWeight.Bold)
-                        Icon(Icons.Default.KeyboardArrowDown, null, Modifier.rotate(if (expanded) 180f else 0f))
-                    }
-                    Text(item.title ?: "(no title)")
-                    if (expanded) {
-                        Text(item.text ?: "")
-                        Text("Captured: ${formatter.format(Date(item.capturedAt))}")
-                        Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                            TextButton(onClick = onOpenSource) { Text("Open source app") }
-                            IconButton(onClick = {
-                                deleteTriggered = true
-                                onDelete()
-                            }) { Icon(Icons.Default.Delete, contentDescription = "Delete notification") }
-                        }
+                        Spacer(Modifier.width(4.dp))
+                        Text("Delete", color = MaterialTheme.colorScheme.onErrorContainer)
                     }
                 }
             }
         }
-
-        if (mode == SwipeActionMode.SWIPE_REVEAL_DELETE && revealDeleteAction) {
-            Card(Modifier.fillMaxWidth(), colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.errorContainer)) {
-                Row(
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .padding(horizontal = 8.dp),
-                    horizontalArrangement = Arrangement.End
-                ) {
-                    IconButton(onClick = {
-                        deleteTriggered = true
-                        onDelete()
-                    }) {
-                        Icon(
-                            Icons.Default.Delete,
-                            contentDescription = "Delete notification",
-                            tint = MaterialTheme.colorScheme.onErrorContainer
-                        )
+    ) {
+        Card(Modifier.fillMaxWidth().clickable {
+            if (dismissState.currentValue == SwipeToDismissBoxValue.EndToStart) {
+                scope.launch { dismissState.reset() }
+            } else {
+                onToggleExpanded()
+            }
+        }) {
+            Column(Modifier.padding(12.dp)) {
+                Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
+                    Text(item.appName ?: item.packageName, fontWeight = FontWeight.Bold)
+                    Icon(Icons.Default.KeyboardArrowDown, null, Modifier.rotate(if (expanded) 180f else 0f))
+                }
+                Text(item.title ?: "(no title)")
+                if (expanded) {
+                    Text(item.text ?: "")
+                    Text("Captured: ${formatter.format(Date(item.capturedAt))}")
+                    Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                        TextButton(onClick = onOpenSource) { Text("Open source app") }
+                        IconButton(onClick = {
+                            deleteTriggered = true
+                            onDelete()
+                        }) { Icon(Icons.Default.Delete, contentDescription = "Delete notification") }
                     }
                 }
             }
